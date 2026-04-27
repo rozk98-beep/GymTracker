@@ -361,7 +361,7 @@ function defaultState() {
     wlog: [],
     wklog: {},
     foodlog: {},
-    water: { date: '', count: 0 },
+    waterLog: {},
     measures: {},
     pbs: {},
     mealEditMode: false,
@@ -728,12 +728,9 @@ function renderAffirmation() {
 }
 
 function renderWater() {
-  // Reset if date changed — always compare local date strings
-  if (S.water.date !== todayStr()) {
-    S.water = { date: todayStr(), count: 0 };
-    save();
-  }
-  const c = S.water.count;
+  const ds = todayStr(); // Water always shows TODAY only
+  if (!S.waterLog) S.waterLog = {};
+  const c = S.waterLog[ds] || 0;
   const msgs = [
     'Stay hydrated — 3 × 32oz today',
     'Good start — 2 more to go',
@@ -747,7 +744,7 @@ function renderWater() {
   document.getElementById('water-wrap').innerHTML = `
     <div class="card" style="margin-bottom:10px">
       <div class="row">
-        <div class="lbl" style="margin-bottom:0">Daily water</div>
+        <div class="lbl" style="margin-bottom:0">Daily water — today</div>
         <div style="font-size:12px;color:var(--${c >= 3 ? 'green' : 'muted'})">${c}/3 bottles</div>
       </div>
       <div class="water-row">${bottles}<div class="wlbl">${msgs[Math.min(c, 3)]}</div></div>
@@ -755,7 +752,8 @@ function renderWater() {
 }
 
 function logWater(count) {
-  S.water = { date: todayStr(), count };
+  if (!S.waterLog) S.waterLog = {};
+  S.waterLog[todayStr()] = count;
   save();
   renderWater();
   if (count >= 3) toast('Hydration goal hit! 💧');
@@ -764,20 +762,58 @@ function logWater(count) {
 function renderFoodLog() {
   const ds = getViewDate();
   const logged = S.foodlog[ds] || [];
-  const { cal, protein } = calcDayIntake(ds);
+  const { cal, protein, gymBonus } = calcDayIntake(ds);
+  const latest = S.wlog.length ? S.wlog[S.wlog.length - 1].val : START_KG;
+  const tdee = calcTDEE(latest) + gymBonus;
+  const remaining = tdee - cal;
+  const pct = Math.min(100, Math.round(cal / tdee * 100));
+  const overBudget = cal > tdee;
+
+  // Live calorie bar like MyFitnessPal
+  const calBar = `
+    <div style="background:var(--s2);border:1px solid var(--border);border-radius:14px;padding:13px;margin-bottom:10px">
+      <div class="row" style="margin-bottom:8px">
+        <div style="text-align:center;flex:1">
+          <div style="font-family:'Syne',sans-serif;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px">Goal</div>
+          <div style="font-family:'Syne',sans-serif;font-size:20px;font-weight:800;color:var(--text)">${tdee}</div>
+        </div>
+        <div style="font-size:22px;color:var(--muted);padding:0 8px;align-self:center">−</div>
+        <div style="text-align:center;flex:1">
+          <div style="font-family:'Syne',sans-serif;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px">Eaten</div>
+          <div style="font-family:'Syne',sans-serif;font-size:20px;font-weight:800;color:var(--blue)">${cal}</div>
+        </div>
+        <div style="font-size:22px;color:var(--muted);padding:0 8px;align-self:center">=</div>
+        <div style="text-align:center;flex:1">
+          <div style="font-family:'Syne',sans-serif;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px">${overBudget ? 'Over' : 'Left'}</div>
+          <div style="font-family:'Syne',sans-serif;font-size:20px;font-weight:800;color:var(--${overBudget ? 'red' : 'green'})">${Math.abs(remaining)}</div>
+        </div>
+      </div>
+      <div class="pbar" style="height:8px;border-radius:6px">
+        <div style="height:100%;width:${pct}%;background:${overBudget ? 'var(--red)' : 'linear-gradient(90deg,var(--blue),var(--green))'};border-radius:6px;transition:width .4s ease"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:11px;color:var(--muted)">
+        <span>${protein}g protein</span>
+        ${gymBonus > 0 ? `<span style="color:var(--green)">+${gymBonus} gym burn included</span>` : '<span>Log food below ↓</span>'}
+      </div>
+    </div>`;
+
   let items = S.foodItems.map(fi => {
     const checked = logged.includes(fi.id);
     return `<div class="food-log-item" onclick="toggleFoodItem('${fi.id}','${ds}')">
       <div class="food-check${checked ? ' checked' : ''}">${checked ? '✓' : ''}</div>
       <div class="food-log-name">${fi.name}</div>
-      <div class="food-log-cal">${fi.cal > 0 ? fi.cal + ' cal' : ''}</div>
+      <div style="text-align:right;flex-shrink:0">
+        ${fi.cal > 0 ? `<div class="food-log-cal">${fi.cal} cal</div>` : ''}
+        ${fi.protein > 0 ? `<div style="font-size:10px;color:var(--blue)">${fi.protein}g pro</div>` : ''}
+      </div>
     </div>`;
   }).join('');
+
   document.getElementById('foodlog-wrap').innerHTML = `
+    ${calBar}
     <div class="card" style="margin-bottom:10px">
       <div class="row" style="margin-bottom:10px">
-        <div class="lbl" style="margin-bottom:0">Food Log</div>
-        <div style="font-size:11px;color:var(--muted)">${cal} cal · ${protein}g protein</div>
+        <div class="lbl" style="margin-bottom:0">Tap what you ate — ${fmtDate(ds)}</div>
       </div>
       ${items}
       <button class="add-food-btn" onclick="showModal('modal-food-item')">+ Add food to rotation</button>
