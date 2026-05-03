@@ -588,17 +588,62 @@ function migrateOldData(state) {
 let S = (() => {
   try {
     const raw = localStorage.getItem(SK);
+    let state;
     if (raw) {
       const parsed = JSON.parse(raw);
-      return Object.assign({}, defaultState(), parsed);
+      state = Object.assign({}, defaultState(), parsed);
+    } else {
+      state = defaultState();
     }
-    // First load — migrate from old versions
-    const fresh = defaultState();
-    return migrateOldData(fresh);
+
+    // Always ensure waterLog is a proper object keyed by date — never a bare number
+    if (typeof state.waterLog !== 'object' || Array.isArray(state.waterLog) || state.waterLog === null) {
+      state.waterLog = {};
+    }
+    // If any value inside waterLog is not a number, clean it
+    Object.keys(state.waterLog).forEach(k => {
+      if (typeof state.waterLog[k] !== 'number') delete state.waterLog[k];
+    });
+
+    // Pre-populate known weight history if wlog is empty
+    if (!state.wlog || state.wlog.length === 0) {
+      state.wlog = [
+        {date:'2025-04-12',val:100},
+        {date:'2025-04-26',val:98.8},
+        {date:'2025-04-28',val:97.75},
+        {date:'2025-04-29',val:97.8},
+        {date:'2025-04-30',val:97.4},
+        {date:'2025-05-01',val:97.2},
+        {date:'2025-05-02',val:97.75},
+        {date:'2025-05-03',val:97.8},
+      ].filter(e => !state.wlog.find(w => w.date === e.date));
+      state.wlog.sort((a,b) => a.date.localeCompare(b.date));
+    }
+
+    // Set streak to 21 minimum since we know this
+    if (!state.streak || state.streak < 21) state.streak = 21;
+
+    return state;
   } catch(e) { return defaultState(); }
 })();
 
+function sanitizeWaterLog() {
+  // Nuclear fix — ensure waterLog is always a plain object keyed by YYYY-MM-DD strings
+  // Never a number, never undefined, never null
+  if (!S.waterLog || typeof S.waterLog !== 'object' || Array.isArray(S.waterLog)) {
+    S.waterLog = {};
+    return;
+  }
+  // Remove any keys that aren't date strings or values that aren't numbers
+  Object.keys(S.waterLog).forEach(k => {
+    const isDateKey = /^\d{4}-\d{2}-\d{2}$/.test(k);
+    const isNumVal = typeof S.waterLog[k] === 'number';
+    if (!isDateKey || !isNumVal) delete S.waterLog[k];
+  });
+}
+
 function save() {
+  sanitizeWaterLog();
   try { localStorage.setItem(SK, JSON.stringify(S)); } catch(e) {}
 }
 
@@ -698,7 +743,9 @@ function showModal(id) { document.getElementById(id).classList.add('show'); }
 function closeModal(id) { document.getElementById(id).classList.remove('show'); }
 
 function calcTDEE(kg) {
-  const bmr = (10*kg)+(6.25*H_CM)-(5*AGE)+5;
+  // Use provided kg, fallback to latest logged weight, then 97.4kg (known current weight)
+  const weight = kg || (S.wlog.length ? S.wlog[S.wlog.length-1].val : 97.4);
+  const bmr = (10*weight)+(6.25*H_CM)-(5*AGE)+5;
   return r0(bmr*1.55);
 }
 
@@ -732,7 +779,7 @@ function calcDayIntake(ds) {
 }
 
 function calcDayDeficit(ds) {
-  const latest = S.wlog.length ? S.wlog[S.wlog.length-1].val : START;
+  const latest = S.wlog.length ? S.wlog[S.wlog.length-1].val : 97.4;
   const tdee = calcTDEE(latest);
   const {cal, protein} = calcDayIntake(ds);
   const gymBurn = calcGymBurn(ds);
@@ -988,6 +1035,7 @@ function logSteps(steps, ds) {
 }
 
 function renderWater() {
+  sanitizeWaterLog(); // fix any corrupt state before reading
   const ds = todayDs(); // water is always today only — never bleeds to other days
   if (!S.waterLog) S.waterLog = {};
   const c = S.waterLog[ds] || 0;
