@@ -475,7 +475,7 @@ body::after{content:'';position:fixed;inset:0;background-image:url("data:image/s
 // ═══════════════════════════════════════════════════════════
 // STORAGE — single atomic object
 // ═══════════════════════════════════════════════════════════
-const SK = 'shahroz_v8';
+const SK = 'shahroz_v10';
 
 function defaultState() {
   return {
@@ -586,45 +586,115 @@ function migrateOldData(state) {
 }
 
 let S = (() => {
+  const def = defaultState();
+  // Known weight history — pre-populated from conversation records
+  const KNOWN_WEIGHTS = [
+    {date:'2025-04-12',val:100},
+    {date:'2025-04-26',val:98.8},
+    {date:'2025-04-28',val:97.75},
+    {date:'2025-04-29',val:97.8},
+    {date:'2025-04-30',val:97.4},
+    {date:'2025-05-01',val:97.2},
+    {date:'2025-05-02',val:97.75},
+    {date:'2025-05-03',val:97.8},
+  ];
+
   try {
     const raw = localStorage.getItem(SK);
-    let state;
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      state = Object.assign({}, defaultState(), parsed);
-    } else {
-      state = defaultState();
+    if (!raw) {
+      // Fresh install — use known weights
+      def.wlog = KNOWN_WEIGHTS;
+      def.streak = 21;
+      return def;
     }
 
-    // Always ensure waterLog is a proper object keyed by date — never a bare number
-    if (typeof state.waterLog !== 'object' || Array.isArray(state.waterLog) || state.waterLog === null) {
-      state.waterLog = {};
-    }
-    // If any value inside waterLog is not a number, clean it
-    Object.keys(state.waterLog).forEach(k => {
-      if (typeof state.waterLog[k] !== 'number') delete state.waterLog[k];
-    });
+    const parsed = JSON.parse(raw);
 
-    // Pre-populate known weight history if wlog is empty
-    if (!state.wlog || state.wlog.length === 0) {
-      state.wlog = [
-        {date:'2025-04-12',val:100},
-        {date:'2025-04-26',val:98.8},
-        {date:'2025-04-28',val:97.75},
-        {date:'2025-04-29',val:97.8},
-        {date:'2025-04-30',val:97.4},
-        {date:'2025-05-01',val:97.2},
-        {date:'2025-05-02',val:97.75},
-        {date:'2025-05-03',val:97.8},
-      ].filter(e => !state.wlog.find(w => w.date === e.date));
+    // Build state field by field — never blindly merge to avoid corrupt data
+    const state = defaultState();
+
+    // Safe arrays
+    if (Array.isArray(parsed.wlog) && parsed.wlog.length > 0) {
+      state.wlog = parsed.wlog.filter(w => w && w.date && typeof w.val === 'number');
+      // Merge known weights if missing
+      KNOWN_WEIGHTS.forEach(kw => {
+        if (!state.wlog.find(w => w.date === kw.date)) state.wlog.push(kw);
+      });
       state.wlog.sort((a,b) => a.date.localeCompare(b.date));
+    } else {
+      state.wlog = KNOWN_WEIGHTS;
     }
 
-    // Set streak to 21 minimum since we know this
-    if (!state.streak || state.streak < 21) state.streak = 21;
+    // Safe workout log
+    if (parsed.wklog && typeof parsed.wklog === 'object' && !Array.isArray(parsed.wklog)) {
+      state.wklog = parsed.wklog;
+    }
+
+    // Safe food log
+    if (parsed.foodlog && typeof parsed.foodlog === 'object' && !Array.isArray(parsed.foodlog)) {
+      state.foodlog = parsed.foodlog;
+    }
+
+    // WATERLOG — validate every single entry, never trust raw value
+    state.waterLog = {};
+    if (parsed.waterLog && typeof parsed.waterLog === 'object' && !Array.isArray(parsed.waterLog)) {
+      Object.entries(parsed.waterLog).forEach(([k, v]) => {
+        // Only accept YYYY-MM-DD keys with integer values 0-5
+        if (/^\d{4}-\d{2}-\d{2}$/.test(k) && Number.isInteger(v) && v >= 0 && v <= 5) {
+          state.waterLog[k] = v;
+        }
+      });
+    }
+
+    // Steps log
+    if (parsed.stepsLog && typeof parsed.stepsLog === 'object' && !Array.isArray(parsed.stepsLog)) {
+      state.stepsLog = parsed.stepsLog;
+    }
+
+    // Personal bests
+    if (parsed.pbs && typeof parsed.pbs === 'object' && !Array.isArray(parsed.pbs)) {
+      state.pbs = parsed.pbs;
+    }
+
+    // Measures
+    if (parsed.measures && typeof parsed.measures === 'object' && !Array.isArray(parsed.measures)) {
+      state.measures = parsed.measures;
+    }
+
+    // Primitives
+    if (typeof parsed.streak === 'number') state.streak = Math.max(parsed.streak, 21);
+    else state.streak = 21;
+
+    if (parsed.lastGym && typeof parsed.lastGym === 'string') state.lastGym = parsed.lastGym;
+    if (typeof parsed.cheat === 'number') state.cheat = parsed.cheat;
+    if (parsed.selectedDate && typeof parsed.selectedDate === 'string') state.selectedDate = parsed.selectedDate;
+
+    // Schedule — only accept if valid object
+    if (parsed.schedule && typeof parsed.schedule === 'object' && !Array.isArray(parsed.schedule)) {
+      state.schedule = parsed.schedule;
+    }
+
+    // Exercises — only accept if valid array
+    if (Array.isArray(parsed.exercises) && parsed.exercises.length > 0) {
+      state.exercises = parsed.exercises;
+    }
+
+    // Meals — only accept if valid array
+    if (Array.isArray(parsed.meals) && parsed.meals.length > 0) {
+      state.meals = parsed.meals;
+    }
+
+    // Food items — only accept if valid array
+    if (Array.isArray(parsed.foodItems) && parsed.foodItems.length > 0) {
+      state.foodItems = parsed.foodItems;
+    }
 
     return state;
-  } catch(e) { return defaultState(); }
+  } catch(e) {
+    def.wlog = KNOWN_WEIGHTS;
+    def.streak = 21;
+    return def;
+  }
 })();
 
 function sanitizeWaterLog() {
@@ -742,9 +812,18 @@ function toast(msg) {
 function showModal(id) { document.getElementById(id).classList.add('show'); }
 function closeModal(id) { document.getElementById(id).classList.remove('show'); }
 
+function currentWeight() {
+  // Always returns the most recent logged weight, defaulting to 97.4 (known current)
+  if (S.wlog && S.wlog.length > 0) {
+    // Sort by date and get most recent
+    const sorted = [...S.wlog].sort((a,b) => b.date.localeCompare(a.date));
+    return sorted[0].val;
+  }
+  return 97.4;
+}
+
 function calcTDEE(kg) {
-  // Use provided kg, fallback to latest logged weight, then 97.4kg (known current weight)
-  const weight = kg || (S.wlog.length ? S.wlog[S.wlog.length-1].val : 97.4);
+  const weight = (typeof kg === 'number' && kg > 50 && kg < 200) ? kg : currentWeight();
   const bmr = (10*weight)+(6.25*H_CM)-(5*AGE)+5;
   return r0(bmr*1.55);
 }
@@ -779,7 +858,7 @@ function calcDayIntake(ds) {
 }
 
 function calcDayDeficit(ds) {
-  const latest = S.wlog.length ? S.wlog[S.wlog.length-1].val : 97.4;
+  const latest = currentWeight();
   const tdee = calcTDEE(latest);
   const {cal, protein} = calcDayIntake(ds);
   const gymBurn = calcGymBurn(ds);
@@ -878,7 +957,7 @@ function renderViewBanner() {
 function renderGameplan() {
   const ds = getViewDs();
   const {tdee, cal, gymBurn, stepBurn, totalBurn, deficit} = calcDayDeficit(ds);
-  const latest = S.wlog.length ? S.wlog[S.wlog.length-1].val : START;
+  const latest = currentWeight();
   const dow = dowOf(ds);
   const isGym = S.schedule[dow]?.gym;
   document.getElementById('gameplan-wrap').innerHTML = `
@@ -1034,11 +1113,33 @@ function logSteps(steps, ds) {
   if (steps>0) toast(`${(steps/1000).toFixed(0)}k steps logged · +${STEP_CALS[steps]} cal burn`);
 }
 
+// ── WATER — completely isolated storage, never touches S ──────
+const WATER_KEY = 'sz_water_v1';
+
+function getWaterCount() {
+  // Returns {date, count} for today only
+  const today = todayDs();
+  try {
+    const raw = localStorage.getItem(WATER_KEY);
+    if (!raw) return 0;
+    const obj = JSON.parse(raw);
+    // obj must be {date: 'YYYY-MM-DD', count: N}
+    if (obj && obj.date === today && typeof obj.count === 'number') {
+      return obj.count;
+    }
+    return 0; // different day or corrupt — return 0
+  } catch(e) { return 0; }
+}
+
+function setWaterCount(count) {
+  const today = todayDs();
+  try {
+    localStorage.setItem(WATER_KEY, JSON.stringify({date: today, count}));
+  } catch(e) {}
+}
+
 function renderWater() {
-  sanitizeWaterLog(); // fix any corrupt state before reading
-  const ds = todayDs(); // water is always today only — never bleeds to other days
-  if (!S.waterLog) S.waterLog = {};
-  const c = S.waterLog[ds] || 0;
+  const c = getWaterCount();
   const msgs = [
     'Stay hydrated — 5 × 24oz today',
     '1 down — 4 more to go',
@@ -1050,8 +1151,6 @@ function renderWater() {
   let bottles = '';
   for (let i = 0; i < 5; i++) {
     const filled = i < c;
-    // Tapping a filled bottle sets count to i (unfills it and all after)
-    // Tapping an empty bottle sets count to i+1 (fills up to and including it)
     const newCount = filled ? i : i + 1;
     bottles += `<div class="wbottle${filled?' filled':''}" onclick="logWater(${newCount})">💧</div>`;
   }
@@ -1066,10 +1165,7 @@ function renderWater() {
 }
 
 function logWater(count) {
-  if (!S.waterLog) S.waterLog = {};
-  // Only ever write to today — never affects other days
-  S.waterLog[todayDs()] = count;
-  save();
+  setWaterCount(count);
   renderWater();
   if (count >= 5) toast('Hydration goal smashed! 💧');
 }
@@ -1422,7 +1518,7 @@ function renderHistoryPage() {
 let mealEditMode = false, editingMealId = null;
 
 function renderFoodPage() {
-  const latest = S.wlog.length ? S.wlog[S.wlog.length-1].val : START;
+  const latest = currentWeight();
   const tdee = calcTDEE(latest);
   const avgIntake = 1628;
   document.getElementById('f-tdee').textContent = tdee;
@@ -1488,7 +1584,7 @@ function saveMealEdit() {
 }
 
 function renderFaceMilestones() {
-  const latest = S.wlog.length ? S.wlog[S.wlog.length-1].val : START;
+  const latest = currentWeight();
   document.getElementById('face-wrap').innerHTML = FACE_MS.map(m=>{
     const done = latest<=m.kg;
     return `<div class="ms-row">
@@ -1500,7 +1596,7 @@ function renderFaceMilestones() {
 }
 
 function renderTimeline() {
-  const latest = S.wlog.length ? S.wlog[S.wlog.length-1].val : START;
+  const latest = currentWeight();
   document.getElementById('timeline-wrap').innerHTML = TIMELINE.map(m=>{
     const done = latest<=m.kg;
     return `<div class="ms-row">
@@ -1518,7 +1614,7 @@ function renderTimeline() {
 // REWARDS PAGE
 // ═══════════════════════════════════════════════════════════
 function renderRewardsPage() {
-  const latest = S.wlog.length ? S.wlog[S.wlog.length-1].val : START;
+  const latest = currentWeight();
   document.getElementById('rewards-list').innerHTML = REWARDS.map(r=>{
     const unlocked = latest<=r.kg;
     const next = !unlocked && latest-r.kg <= 5;
