@@ -541,11 +541,60 @@ function defaultState() {
   };
 }
 
+function migrateOldData(state) {
+  const oldKeys = ['shahroz_v6','shahroz_v7','gl2_wlog','sm_wlog'];
+  oldKeys.forEach(key => {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return;
+      const old = JSON.parse(raw);
+      if (old.wlog && Array.isArray(old.wlog)) {
+        old.wlog.forEach(entry => {
+          if (entry && entry.date && entry.val && !state.wlog.find(w => w.date === entry.date)) {
+            state.wlog.push(entry);
+          }
+        });
+        state.wlog.sort((a,b) => a.date.localeCompare(b.date));
+      }
+      if (old.wklog && typeof old.wklog === 'object') {
+        Object.entries(old.wklog).forEach(([ds, exs]) => {
+          if (!state.wklog[ds]) state.wklog[ds] = exs;
+        });
+      }
+      if (old.pbs && typeof old.pbs === 'object') {
+        Object.entries(old.pbs).forEach(([id, kg]) => {
+          if (!state.pbs[id] || kg > state.pbs[id]) state.pbs[id] = kg;
+        });
+      }
+      if (old.foodlog && typeof old.foodlog === 'object') {
+        Object.entries(old.foodlog).forEach(([ds, items]) => {
+          if (!state.foodlog[ds]) state.foodlog[ds] = items;
+        });
+      }
+      if (old.measures && typeof old.measures === 'object' && Object.keys(old.measures).length > 0) {
+        if (!Object.keys(state.measures).length) state.measures = old.measures;
+      }
+      if (old.streak && old.streak > state.streak) state.streak = old.streak;
+      if (old.stepsLog && typeof old.stepsLog === 'object') {
+        Object.entries(old.stepsLog).forEach(([ds, steps]) => {
+          if (!state.stepsLog[ds]) state.stepsLog[ds] = steps;
+        });
+      }
+    } catch(e) {}
+  });
+  return state;
+}
+
 let S = (() => {
   try {
     const raw = localStorage.getItem(SK);
-    if (!raw) return defaultState();
-    return Object.assign({}, defaultState(), JSON.parse(raw));
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return Object.assign({}, defaultState(), parsed);
+    }
+    // First load — migrate from old versions
+    const fresh = defaultState();
+    return migrateOldData(fresh);
   } catch(e) { return defaultState(); }
 })();
 
@@ -826,14 +875,13 @@ function renderCalTracker() {
   const remaining = totalBurn - cal;
   const pct = cal > 0 ? Math.min(100, r0(cal/totalBurn*100)) : 0;
   const over = cal > totalBurn;
-  const protPct = Math.min(100, r0(protein/120*100));
   
   document.getElementById('cal-tracker-wrap').innerHTML = `
     <div class="cal-tracker">
       <div class="cal-row">
         <div class="cal-block">
           <div class="cal-num" style="color:var(--muted)">${totalBurn}</div>
-          <div class="cal-lbl">Budget</div>
+          <div class="cal-lbl">${gymBurn>0||stepBurn>0?'Budget+burns':'TDEE'}</div>
         </div>
         <div class="cal-op">−</div>
         <div class="cal-block">
@@ -860,17 +908,12 @@ function renderCalTracker() {
           <div class="macro-pill-val" style="color:var(--green)">${deficit>0?deficit.toLocaleString():0}</div>
           <div class="macro-pill-lbl">Deficit</div>
         </div>
+        <div class="macro-pill">
+          <div class="macro-pill-val" style="color:var(--muted)">${tdee}</div>
+          <div class="macro-pill-lbl">Base TDEE</div>
+        </div>
         ${gymBurn>0?`<div class="macro-pill"><div class="macro-pill-val" style="color:var(--orange)">+${gymBurn}</div><div class="macro-pill-lbl">Gym burn</div></div>`:''}
         ${stepBurn>0?`<div class="macro-pill"><div class="macro-pill-val" style="color:var(--purple)">+${stepBurn}</div><div class="macro-pill-lbl">Steps burn</div></div>`:''}
-      </div>
-      <div style="margin-top:8px">
-        <div class="row" style="margin-bottom:3px">
-          <div style="font-size:10px;color:var(--muted)">Protein ${protein}g / 120g</div>
-          <div style="font-size:10px;color:var(--${protPct>=100?'green':'muted'})">${protPct}%${protPct>=100?' ✓':''}</div>
-        </div>
-        <div class="pbar" style="height:3px">
-          <div class="pbar-fill" style="width:${protPct}%;background:var(--blue)"></div>
-        </div>
       </div>
     </div>`;
 }
@@ -945,13 +988,24 @@ function logSteps(steps, ds) {
 }
 
 function renderWater() {
-  const ds = todayDs(); // water is always today only
+  const ds = todayDs(); // water is always today only — never bleeds to other days
   if (!S.waterLog) S.waterLog = {};
   const c = S.waterLog[ds] || 0;
-  const msgs = ['Stay hydrated — 5 × 24oz today','Good start — 4 more to go','Halfway there — 3 more!','Good — 2 more to go','Almost there — one more!','Hydration goal smashed! 💪'];
+  const msgs = [
+    'Stay hydrated — 5 × 24oz today',
+    '1 down — 4 more to go',
+    '2 down — 3 more to go',
+    'Halfway! — 2 more to go',
+    'So close — one more!',
+    'Hydration goal smashed! 💪'
+  ];
   let bottles = '';
-  for (let i=0;i<5;i++) {
-    bottles += `<div class="wbottle${i<c?' filled':''}" onclick="logWater(${i+1})">💧</div>`;
+  for (let i = 0; i < 5; i++) {
+    const filled = i < c;
+    // Tapping a filled bottle sets count to i (unfills it and all after)
+    // Tapping an empty bottle sets count to i+1 (fills up to and including it)
+    const newCount = filled ? i : i + 1;
+    bottles += `<div class="wbottle${filled?' filled':''}" onclick="logWater(${newCount})">💧</div>`;
   }
   document.getElementById('water-wrap').innerHTML = `
     <div class="card" style="margin-bottom:10px">
@@ -965,9 +1019,11 @@ function renderWater() {
 
 function logWater(count) {
   if (!S.waterLog) S.waterLog = {};
+  // Only ever write to today — never affects other days
   S.waterLog[todayDs()] = count;
-  save(); renderWater();
-  if (count>=5) toast('Hydration goal smashed! 💧');
+  save();
+  renderWater();
+  if (count >= 5) toast('Hydration goal smashed! 💧');
 }
 
 function renderSession() {
