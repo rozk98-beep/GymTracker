@@ -675,42 +675,89 @@ function defaultState() {
 // ═══════════════════════════════════════════════════════════
 // LOAD STATE — field by field, never blind merge
 // ═══════════════════════════════════════════════════════════
+// ── Scan every possible old key and find the richest dataset ──
+function findBestOldState() {
+  const OLD_KEYS = [
+    'sz_gymlog_v12','shahroz_v10','shahroz_v8','shahroz_v7','shahroz_v6',
+    'gl2_wlog','sm_wlog','shahroz_v5','shahroz_v4','shahroz_v3',
+  ];
+  let best = null;
+  let bestScore = -1;
+  OLD_KEYS.forEach(key => {
+    if (key === SK) return; // skip current key — handled separately
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return;
+      const p = JSON.parse(raw);
+      // Score by richness of data
+      let score = 0;
+      if (Array.isArray(p.wlog)) score += p.wlog.length * 10;
+      if (p.wklog && typeof p.wklog === 'object') score += Object.keys(p.wklog).length * 5;
+      if (p.pbs && typeof p.pbs === 'object') score += Object.keys(p.pbs).length * 3;
+      if (p.foodlog && typeof p.foodlog === 'object') score += Object.keys(p.foodlog).length;
+      if (typeof p.streak === 'number') score += p.streak;
+      if (score > bestScore) { bestScore = score; best = p; }
+    } catch(e) {}
+  });
+  return best;
+}
+
+function mergeState(p, s) {
+  if (!p) return s;
+  // wlog
+  const saved_wlog = Array.isArray(p.wlog) ? p.wlog.filter(w=>w&&w.date&&typeof w.val==='number') : [];
+  const merged = [...KNOWN_WEIGHTS];
+  saved_wlog.forEach(w => { if (!merged.find(m=>m.date===w.date)) merged.push(w); });
+  merged.sort((a,b)=>a.date.localeCompare(b.date));
+  s.wlog = merged;
+  // safe object fields
+  if (p.wklog && typeof p.wklog==='object' && !Array.isArray(p.wklog)) s.wklog=p.wklog;
+  if (p.foodlog && typeof p.foodlog==='object' && !Array.isArray(p.foodlog)) s.foodlog=p.foodlog;
+  if (p.stepsLog && typeof p.stepsLog==='object' && !Array.isArray(p.stepsLog)) s.stepsLog=p.stepsLog;
+  if (p.pbs && typeof p.pbs==='object' && !Array.isArray(p.pbs)) s.pbs=p.pbs;
+  if (p.measures && typeof p.measures==='object' && !Array.isArray(p.measures)) s.measures=p.measures;
+  if (p.schedule && typeof p.schedule==='object' && !Array.isArray(p.schedule)) s.schedule=p.schedule;
+  // primitives
+  if (typeof p.streak==='number') s.streak=Math.max(p.streak,21);
+  if (p.lastGym && typeof p.lastGym==='string') s.lastGym=p.lastGym;
+  if (typeof p.cheat==='number') s.cheat=p.cheat;
+  if (p.selectedDate && typeof p.selectedDate==='string') s.selectedDate=p.selectedDate;
+  // arrays — only override if valid and has content
+  if (Array.isArray(p.exercises) && p.exercises.length>0) s.exercises=p.exercises;
+  if (Array.isArray(p.meals) && p.meals.length>0) s.meals=p.meals;
+  // Never override foodItems from old state — always use latest accurate list
+  return s;
+}
+
 let S = (() => {
   const def = defaultState();
   def.wlog = [...KNOWN_WEIGHTS];
   def.streak = 21;
   try {
+    // First try current key
     const raw = localStorage.getItem(SK);
-    if (!raw) return def;
-    const p = JSON.parse(raw);
-    const s = defaultState();
-    // wlog — merge known + saved
-    const saved_wlog = Array.isArray(p.wlog) ? p.wlog.filter(w=>w&&w.date&&typeof w.val==='number') : [];
-    const merged = [...KNOWN_WEIGHTS];
-    saved_wlog.forEach(w => { if (!merged.find(m=>m.date===w.date)) merged.push(w); });
-    merged.sort((a,b)=>a.date.localeCompare(b.date));
-    s.wlog = merged;
-    // safe fields
-    if (p.wklog && typeof p.wklog==='object' && !Array.isArray(p.wklog)) s.wklog=p.wklog;
-    if (p.foodlog && typeof p.foodlog==='object' && !Array.isArray(p.foodlog)) s.foodlog=p.foodlog;
-    if (p.stepsLog && typeof p.stepsLog==='object' && !Array.isArray(p.stepsLog)) s.stepsLog=p.stepsLog;
-    if (p.pbs && typeof p.pbs==='object' && !Array.isArray(p.pbs)) s.pbs=p.pbs;
-    if (p.measures && typeof p.measures==='object' && !Array.isArray(p.measures)) s.measures=p.measures;
-    if (typeof p.streak==='number') s.streak=Math.max(p.streak,21);
-    if (p.lastGym && typeof p.lastGym==='string') s.lastGym=p.lastGym;
-    if (typeof p.cheat==='number') s.cheat=p.cheat;
-    if (p.selectedDate && typeof p.selectedDate==='string') s.selectedDate=p.selectedDate;
-    if (p.schedule && typeof p.schedule==='object' && !Array.isArray(p.schedule)) s.schedule=p.schedule;
-    if (Array.isArray(p.exercises) && p.exercises.length>0) s.exercises=p.exercises;
-    if (Array.isArray(p.meals) && p.meals.length>0) s.meals=p.meals;
-    if (Array.isArray(p.foodItems) && p.foodItems.length>0) s.foodItems=p.foodItems;
-    return s;
+    if (raw) {
+      const p = JSON.parse(raw);
+      const s = defaultState();
+      return mergeState(p, s);
+    }
+    // No current key — scan all old keys for existing data
+    const old = findBestOldState();
+    if (old) {
+      const s = defaultState();
+      return mergeState(old, s);
+    }
+    // Truly fresh install
+    return def;
   } catch(e) { return def; }
 })();
 
 function save() {
   try { localStorage.setItem(SK, JSON.stringify(S)); } catch(e) {}
 }
+
+// Save immediately on load so migration persists
+save();
 
 // ═══════════════════════════════════════════════════════════
 // CONSTANTS
